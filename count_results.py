@@ -30,7 +30,7 @@
 #
 # outputs 3 files
 # - results.json  # stats ordered by standardised scoring
-# - results.csv  # same thing except without the nested "votes" column
+# - results.csv  # same thing except without the "sql" or nested "votes" column
 # - results.md  # markdown table for the wiki
 
 
@@ -172,6 +172,7 @@ def main(*args):
     with open("results.csv", "w", encoding="utf-8") as file:
         fieldnames = list(entries_full[0].keys())
         fieldnames.remove("votes")
+        fieldnames.remove("sql")
         writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in entries_full:
