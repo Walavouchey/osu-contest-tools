@@ -1,39 +1,37 @@
 # /// script
 # requires-python = ">=3.14"
-# dependencies = [
-#     "ossapi>=5.3.3",
-# ]
 # ///
-#
-# you'll need an osu! api client with OSU_API_CLIENT and OSU_API_SECRET
-# environment variables set
-#
-# you'll also need an info.csv with at least a "masked_name" column. as a
-# contest host you should've received this file when results were anonymised
-#
-# (ask someone with pink role to) run `!export-contest-results <id>` and save
-# the resulting 4 json files into a `results` folder beside this script:
-#
-# - info.csv
-# - results
-#   - judge_votes.json
-#   - judge_scores.json
-#   - entries.json
-#   - categories.json
-#
-# run this script with `uv run count_results.py` if you have uv installed.
-# otherwise, manually install the dependency first before running:
-#
-# ```sh
-# pip install ossapi
-# ```
-#
-# outputs 3 files
-# - results.json  # stats ordered by standardised scoring
-# - results.csv  # same thing except without the "sql" or nested "votes" column
-# - results.md  # markdown table for the wiki
+
+"""
+You'll need a `judges.csv` file with "id" and "username" fields for each judge.
+This one has to be created manually.
+
+You'll also need a `spoiler.csv` file with at least a "masked_name" field. As a
+contest host you should've received this file when results were anonymised.
+
+Run (or ask an osu! team member to run) `!export-contest-results <id>` and save
+the resulting 4 json files into a `results` folder beside this script:
+
+- judges.csv
+- spoiler.csv
+- results
+  - judge_votes.json
+  - judge_scores.json
+  - entries.json
+  - categories.json
+
+Run this script with `uv run count_results.py` if you have uv installed,
+or `python count_results.py` assuming you have python >=3.14 installed
+
+Outputs 3 files:
+
+- results.json  # stats ordered by standardised scoring
+- results.csv  # same thing except without the "sql" or nested "votes" column
+- results.md  # markdown table for the wiki
+"""
 
 
+import argparse
 import csv
 import json
 import re
@@ -41,21 +39,6 @@ import sys
 import os
 from statistics import mean
 from math import sqrt
-
-from ossapi import Ossapi
-
-client_id = os.getenv("OSU_CLIENT_ID")
-client_secret = os.getenv("OSU_CLIENT_SECRET")
-
-if not client_id:
-    print("client id missing, set the OSU_CLIENT_ID env var")
-if not client_secret:
-    print("client secret missing, set the OSU_CLIENT_SECRET env var")
-if not client_id or not client_secret:
-    sys.exit(1)
-
-RESULTS_FOLDER = "results"
-
 
 def read_json(file):
     with open(file, "r", encoding="utf-8") as file:
@@ -88,22 +71,27 @@ def sanitise(string):
     string = re.sub(r"!$", r"\!", string)
     return string
 
+def parse_args(args):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("-f", "--folder", action='store', default="results", help="folder with the exported results .json file (\"results\" by default)")
+    return parser.parse_args(args)
 
 def main(*args):
-    votes = read_json(f"{RESULTS_FOLDER}/judge_votes.json")
-    scores = read_json(f"{RESULTS_FOLDER}/judge_scores.json")
-    entry_ids = read_json(f"{RESULTS_FOLDER}/entries.json")
+    args = parse_args(args)
+    exit_code = 0
+
+    votes = read_json(f"{args.folder}/judge_votes.json")
+    scores = read_json(f"{args.folder}/judge_scores.json")
+    entry_ids = read_json(f"{args.folder}/entries.json")
     entries_full = read_csv("spoiler.csv")
-    judging_categories = read_json(f"{RESULTS_FOLDER}/categories.json")
+    judging_categories = read_json(f"{args.folder}/categories.json")
 
     category_by_id = {e["id"]: {"name": e["name"], "max_value": e["max_value"]} for e in judging_categories}
-    judge_ids = set(e["user_id"] for e in votes)
-
-    api = Ossapi(client_id, client_secret)
 
     judges = []
-    for judge_id in judge_ids:
-        username = api.user(judge_id).username
+    for row in read_csv("judges.csv"):
+        judge_id = int(row["id"])
+        username = row["username"]
         scores_by_judge = [
             sum(
                 sum(score["value"] for score in where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"]))
@@ -113,8 +101,19 @@ def main(*args):
             )
             for entry in entries_full
         ]
+
         average = mean(scores_by_judge)
         standard_deviation = sqrt(sum((score - average) ** 2 for score in scores_by_judge) / len(scores_by_judge))
+
+        if not scores_by_judge:
+            print(f"couldn't find any judge scores by {username} ({judge_id})", file=sys.stderr)
+            exit_code = 1
+
+        if standard_deviation == 0:
+            print(f"{username}'s ({judge_id}) standard deviation is 0", file=sys.stderr)
+            print({scores_by_judge}, file=sys.stderr)
+            exit_code = 1
+
         judges.append({
             "id": judge_id,
             "username": username,
@@ -122,6 +121,9 @@ def main(*args):
             "average": average,
             "standard_deviation": standard_deviation,
         })
+
+    if exit_code > 0:
+        return exit_code
 
     for entry in entries_full:
         entry["contest_entry_id"] = first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
@@ -132,6 +134,7 @@ def main(*args):
                 vote_scores[score_idx]["contest_scoring_category_name"] = category_by_id[score["contest_scoring_category_id"]]["name"]
             entry["votes"][vote_idx]["scores"] = vote_scores
             entry["votes"][vote_idx]["score_sum"] = sum(score["value"] for score in vote_scores)
+            entry["votes"][vote_idx]["username"] = first(judges, lambda judge: judge["id"] == entry["votes"][vote_idx]["user_id"])["username"]
 
         entry["total_score"] = sum([vote["score_sum"] for vote in entry["votes"]])
         entry["average_score"] = entry["total_score"] / len(judges)
@@ -157,6 +160,7 @@ def main(*args):
                 entry[f"{category["name"]} ({judge["username"]})"] = score
 
         entry["standardised_score"] = sum(entry[f"standardised_score ({judge["username"]})"] for judge in judges)
+        print(f"{entry["masked_name"]}: {entry["standardised_score"]:.2f}")
 
         for category in judging_categories:
             entry[f"{category["name"]}"] = sum([
@@ -172,7 +176,10 @@ def main(*args):
     with open("results.csv", "w", encoding="utf-8") as file:
         fieldnames = list(entries_full[0].keys())
         fieldnames.remove("votes")
-        fieldnames.remove("sql")
+        try:
+            fieldnames.remove("sql")
+        except ValueError:
+            pass
         writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in entries_full:
@@ -188,6 +195,8 @@ def main(*args):
                 rank += 1
             print(f"| {rank} | {entry["standardised_score"]:.2f} | {sanitise(entry["creator"])} | [{sanitise(entry["artist"])} - {sanitise(entry["title"])}](LINK) |", file=file)
             previous_standardised_score = entry["standardised_score"]
+
+    return exit_code
 
 
 if __name__ == "__main__":
