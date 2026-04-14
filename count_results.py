@@ -9,6 +9,10 @@ This one has to be created manually.
 You'll also need a `spoiler.csv` file with at least a "masked_name" field. As a
 contest host you should've received this file when results were anonymised.
 
+If the contest has categories that the entries compete in separately, add a
+"category" column to the `spoiler.csv` file to specify the category of each
+entry. The the output files will get a `-{category}` suffix appended to them.
+
 Run (or ask an osu! team member to run) `!export-contest-results <id>` and save
 the resulting 4 json files into a `results` folder beside this script:
 
@@ -23,7 +27,7 @@ the resulting 4 json files into a `results` folder beside this script:
 Run this script with `uv run count_results.py` if you have uv installed,
 or `python count_results.py` assuming you have python >=3.14 installed
 
-Outputs 3 files:
+Outputs 3 files (or more, in the case of multiple categories):
 
 - results.json  # stats ordered by standardised scoring
 - results.csv  # same thing except without the "sql" or nested "votes" column
@@ -83,118 +87,138 @@ def main(*args):
     votes = read_json(f"{args.folder}/judge_votes.json")
     scores = read_json(f"{args.folder}/judge_scores.json")
     entry_ids = read_json(f"{args.folder}/entries.json")
-    entries_full = read_csv("spoiler.csv")
     judging_categories = read_json(f"{args.folder}/categories.json")
-
     category_by_id = {e["id"]: {"name": e["name"], "max_value": e["max_value"]} for e in judging_categories}
 
-    judges = []
-    for row in read_csv("judges.csv"):
-        judge_id = int(row["id"])
-        username = row["username"]
-        scores_by_judge = [
-            sum(
-                sum(score["value"] for score in where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"]))
-                for vote in votes
-                if vote["user_id"] == judge_id
-                and vote["contest_entry_id"] == first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
-            )
-            for entry in entries_full
-        ]
+    entries_full = read_csv("spoiler.csv")
 
-        average = mean(scores_by_judge)
-        standard_deviation = sqrt(sum((score - average) ** 2 for score in scores_by_judge) / len(scores_by_judge))
+    entry_categories = set(entry.get("category", "") for entry in entries_full)
 
-        if not scores_by_judge:
-            print(f"couldn't find any judge scores by {username} ({judge_id})", file=sys.stderr)
-            exit_code = 1
+    for entry_category in entry_categories:
 
-        if standard_deviation == 0:
-            print(f"{username}'s ({judge_id}) standard deviation is 0", file=sys.stderr)
-            print({scores_by_judge}, file=sys.stderr)
-            exit_code = 1
+        if entry_category:
+            entries = list(filter(lambda entry: entry["category"] == entry_category, entries_full))
+            category_suffix = "-" + entry_category
+        else:
+            entries = entries_full
+            category_suffix = ""
 
-        judges.append({
-            "id": judge_id,
-            "username": username,
-            "scores": scores_by_judge,
-            "average": average,
-            "standard_deviation": standard_deviation,
-        })
-
-    if exit_code > 0:
-        return exit_code
-
-    for entry in entries_full:
-        entry["contest_entry_id"] = first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
-        entry["votes"] = where(votes, lambda vote: vote["contest_entry_id"] == entry["contest_entry_id"])
-        for vote_idx, vote in enumerate(entry["votes"]):
-            vote_scores = where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"])
-            for score_idx, score in enumerate(vote_scores):
-                vote_scores[score_idx]["contest_scoring_category_name"] = category_by_id[score["contest_scoring_category_id"]]["name"]
-            entry["votes"][vote_idx]["scores"] = vote_scores
-            entry["votes"][vote_idx]["score_sum"] = sum(score["value"] for score in vote_scores)
-            entry["votes"][vote_idx]["username"] = first(judges, lambda judge: judge["id"] == entry["votes"][vote_idx]["user_id"])["username"]
-
-        entry["total_score"] = sum([vote["score_sum"] for vote in entry["votes"]])
-        entry["average_score"] = entry["total_score"] / len(judges)
-
-        for judge in judges:
-            raw_score = sum(vote["score_sum"] for vote in entry["votes"] if vote["user_id"] == judge["id"])
-
-            entry[f"standardised_score ({judge["username"]})"] = (raw_score - judge["average"]) / judge["standard_deviation"]
-
+        for entry in entries:
             try:
-                comment = first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["comment"]
+                first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
             except IndexError:
-                comment = ""
+                masked_name = entry["masked_name"]
+                print(f"{masked_name} is not included in the contest results, skipping", file=sys.stderr)
+                entries = list(filter(lambda entry: entry["masked_name"] != masked_name, entries))
 
-            entry[f"comment ({judge["username"]})"] = comment
+        judges = []
+        for row in read_csv("judges.csv"):
+            judge_id = int(row["id"])
+            username = row["username"]
+            scores_by_judge = []
+            scores_by_judge = [
+                sum(
+                    sum(score["value"] for score in where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"]))
+                    for vote in votes
+                    if vote["user_id"] == judge_id
+                    and vote["contest_entry_id"] == first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
+                )
+                for entry in entries
+            ]
+
+            average = mean(scores_by_judge)
+            standard_deviation = sqrt(sum((score - average) ** 2 for score in scores_by_judge) / len(scores_by_judge))
+
+            if not scores_by_judge:
+                print(f"couldn't find any judge scores by {username} ({judge_id})", file=sys.stderr)
+                exit_code = 1
+
+            if standard_deviation == 0:
+                print(f"{username}'s ({judge_id}) standard deviation is 0", file=sys.stderr)
+                print({scores_by_judge}, file=sys.stderr)
+                exit_code = 1
+
+            judges.append({
+                "id": judge_id,
+                "username": username,
+                "scores": scores_by_judge,
+                "average": average,
+                "standard_deviation": standard_deviation,
+            })
+
+        if exit_code > 0:
+            return exit_code
+
+        for entry in entries:
+            entry["contest_entry_id"] = first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
+            entry["votes"] = where(votes, lambda vote: vote["contest_entry_id"] == entry["contest_entry_id"])
+            for vote_idx, vote in enumerate(entry["votes"]):
+                vote_scores = where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"])
+                for score_idx, score in enumerate(vote_scores):
+                    vote_scores[score_idx]["contest_scoring_category_name"] = category_by_id[score["contest_scoring_category_id"]]["name"]
+                entry["votes"][vote_idx]["scores"] = vote_scores
+                entry["votes"][vote_idx]["score_sum"] = sum(score["value"] for score in vote_scores)
+                entry["votes"][vote_idx]["username"] = first(judges, lambda judge: judge["id"] == entry["votes"][vote_idx]["user_id"])["username"]
+
+            entry["total_score"] = sum([vote["score_sum"] for vote in entry["votes"]])
+            entry["average_score"] = entry["total_score"] / len(judges)
+
+            for judge in judges:
+                raw_score = sum(vote["score_sum"] for vote in entry["votes"] if vote["user_id"] == judge["id"])
+
+                entry[f"standardised_score ({judge["username"]})"] = (raw_score - judge["average"]) / judge["standard_deviation"]
+
+                try:
+                    comment = first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["comment"]
+                except IndexError:
+                    comment = ""
+
+                entry[f"comment ({judge["username"]})"] = comment
+
+                for category in judging_categories:
+                    try:
+                        score = first(first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["scores"], lambda score: score["contest_scoring_category_name"] == category["name"])["value"]
+                    except IndexError:
+                        print(f"{judge["username"]} didn't set {category["name"]} score on {entry["masked_name"]}", file=sys.stderr)
+                        score = None
+                    entry[f"{category["name"]} ({judge["username"]})"] = score
+
+            entry["standardised_score"] = sum(entry[f"standardised_score ({judge["username"]})"] for judge in judges)
+            print(f"{entry["masked_name"]}: {entry["standardised_score"]:.2f}")
 
             for category in judging_categories:
-                try:
-                    score = first(first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["scores"], lambda score: score["contest_scoring_category_name"] == category["name"])["value"]
-                except IndexError:
-                    print(f"{judge["username"]} didn't set {category["name"]} score on {entry["masked_name"]}", file=sys.stderr)
-                    score = None
-                entry[f"{category["name"]} ({judge["username"]})"] = score
+                entry[f"{category["name"]}"] = sum([
+                    sum(score["value"] for score in vote["scores"] if score["contest_scoring_category_id"] == category["id"])
+                    for vote in entry["votes"]
+                ])
 
-        entry["standardised_score"] = sum(entry[f"standardised_score ({judge["username"]})"] for judge in judges)
-        print(f"{entry["masked_name"]}: {entry["standardised_score"]:.2f}")
+        entries = sorted(entries, key=lambda entry: entry["standardised_score"], reverse=True)
 
-        for category in judging_categories:
-            entry[f"{category["name"]}"] = sum([
-                sum(score["value"] for score in vote["scores"] if score["contest_scoring_category_id"] == category["id"])
-                for vote in entry["votes"]
-            ])
+        with open(f"results{category_suffix}.json", "w", encoding="utf-8") as file:
+            file.write(json.dumps(entries))
 
-    entries_full = sorted(entries_full, key=lambda entry: entry["standardised_score"], reverse=True)
+        with open(f"results{category_suffix}.csv", "w", encoding="utf-8") as file:
+            fieldnames = list(entries[0].keys())
+            fieldnames.remove("votes")
+            try:
+                fieldnames.remove("sql")
+            except ValueError:
+                pass
+            writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for row in entries:
+                writer.writerow(row)
 
-    with open("results.json", "w", encoding="utf-8") as file:
-        file.write(json.dumps(entries_full))
-
-    with open("results.csv", "w", encoding="utf-8") as file:
-        fieldnames = list(entries_full[0].keys())
-        fieldnames.remove("votes")
-        try:
-            fieldnames.remove("sql")
-        except ValueError:
-            pass
-        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in entries_full:
-            writer.writerow(row)
-
-    with open("results.md", "w", encoding="utf-8") as file:
-        print("| # | Score | User | Beatmap |", file=file)
-        print("| :-: | --: | :-: | :-- |", file=file)
-        rank = 0
-        previous_standardised_score = None
-        for entry in entries_full:
-            if previous_standardised_score != entry["standardised_score"]:
-                rank += 1
-            print(f"| {rank} | {entry["standardised_score"]:.2f} | {sanitise(entry["creator"])} | [{sanitise(entry["artist"])} - {sanitise(entry["title"])}](LINK) |", file=file)
-            previous_standardised_score = entry["standardised_score"]
+        with open(f"results{category_suffix}.md", "w", encoding="utf-8") as file:
+            print("| # | Score | User | Beatmap |", file=file)
+            print("| :-: | --: | :-: | :-- |", file=file)
+            rank = 0
+            previous_standardised_score = None
+            for entry in entries:
+                if previous_standardised_score != entry["standardised_score"]:
+                    rank += 1
+                print(f"| {rank} | {entry["standardised_score"]:.2f} | {sanitise(entry["creator"])} | [{sanitise(entry["artist"])} - {sanitise(entry["title"])}](LINK) |", file=file)
+                previous_standardised_score = entry["standardised_score"]
 
     return exit_code
 
