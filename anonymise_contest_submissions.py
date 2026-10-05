@@ -102,6 +102,14 @@ def sanitise_file_name(s, replacement=" "):
             .replace("?", replacement))
 
 
+def sanitise_file_name_zip(s, replacement=" "):
+    return (s.replace("<", replacement)
+            .replace(">", replacement)
+            .replace(":", replacement)
+            .replace("\"", replacement)
+            .replace("*", replacement)
+            .replace("?", replacement))
+
 
 def extract_archive(src, dst):
     # Extracts a zip archive while sanitising any problematic file names
@@ -109,7 +117,7 @@ def extract_archive(src, dst):
         zipinfos = zipdata.infolist()
 
         for zipinfo in zipinfos:
-            zipinfo.filename = sanitise_file_name(zipinfo.filename)
+            zipinfo.filename = sanitise_file_name_zip(zipinfo.filename)
             zipdata.extract(zipinfo, path=dst)
 
 
@@ -173,7 +181,7 @@ class UniqueRNG():
 def parse_args(args):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", action='store', help="contest name, used as a prefix for output .osz files")
-    parser.add_argument("-t", "--tags", action='store', default=None, help="tags to set to anonymised entries. if omitted, will try to look for a tags.csv with \"creator_id\" and \"tags\" columns, otherwise tags are cleared")
+    parser.add_argument("-t", "--tags", action='store', default=None, help="tags to set go anonymised entries. if omitted, will try to look for a tags.csv with \"creator_id\" and \"tags\" columns, otherwise tags are cleared")
     parser.add_argument("-b", "--backgrounds", action=argparse.BooleanOptionalAction, help="whether to include backgrounds (no by default)")
     parser.add_argument("-v", "--videos", action=argparse.BooleanOptionalAction, help="whether to include videos (no by default)")
     parser.add_argument("-m", "--mode", choices=list(GAME_MODES.keys()), default="osu", help="the game mode to expect")
