@@ -1,4 +1,4 @@
-# /// script
+# /// script  # noqa: EXE002
 # requires-python = ">=3.14"
 # ///
 
@@ -11,7 +11,7 @@ contest host you should've received this file when results were anonymised.
 
 If the contest has categories that the entries compete in separately, add a
 "category" column to the `spoiler.csv` file to specify the category of each
-entry. The the output files will get a `-{category}` suffix appended to them.
+entry. The output files will get a `-{category}` suffix appended to them.
 
 Run (or ask an osu! team member to run) `!export-contest-results <id>` and save
 the resulting 4 json files into a `results` folder beside this script:
@@ -40,23 +40,23 @@ import csv
 import json
 import re
 import sys
-import os
-from statistics import mean
 from math import sqrt
+from statistics import mean
+
 
 def read_json(file):
-    with open(file, "r", encoding="utf-8") as file:
-        return json.loads(file.read())
+    with open(file, "r", encoding="utf-8") as file_handle:
+        return json.loads(file_handle.read())
 
 
 def read_csv(file):
-    with open(file, "r", encoding="utf-8", newline="") as file:
-        reader =csv.DictReader(file)
+    with open(file, "r", encoding="utf-8", newline="") as file_handle:
+        reader = csv.DictReader(file_handle)
         return list(reader)
 
 
 def first(iterable, predicate):
-    return list(filter(predicate, iterable))[0]
+    return next(filter(predicate, iterable))
 
 
 def where(iterable, predicate):
@@ -92,7 +92,7 @@ def main(*args):
 
     entries_full = read_csv("spoiler.csv")
 
-    entry_categories = set(entry.get("category", "") for entry in entries_full)
+    entry_categories = {entry.get("category", "") for entry in entries_full}
 
     for entry_category in entry_categories:
 
@@ -105,7 +105,7 @@ def main(*args):
 
         for entry in entries:
             try:
-                first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
+                first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]  # noqa: B023
             except IndexError:
                 masked_name = entry["masked_name"]
                 print(f"{masked_name} is not included in the contest results, skipping", file=sys.stderr)
@@ -118,10 +118,10 @@ def main(*args):
             scores_by_judge = []
             scores_by_judge = [
                 sum(
-                    sum(score["value"] for score in where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"]))
+                    sum(score["value"] for score in where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"]))  # noqa: B023
                     for vote in votes
                     if vote["user_id"] == judge_id
-                    and vote["contest_entry_id"] == first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
+                    and vote["contest_entry_id"] == first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]  # noqa: B023
                 )
                 for entry in entries
             ]
@@ -150,15 +150,15 @@ def main(*args):
             return exit_code
 
         for entry in entries:
-            entry["contest_entry_id"] = first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]
-            entry["votes"] = where(votes, lambda vote: vote["contest_entry_id"] == entry["contest_entry_id"])
+            entry["contest_entry_id"] = first(entry_ids, lambda e: e["masked_name"] == entry["masked_name"])["id"]  # noqa: B023
+            entry["votes"] = where(votes, lambda vote: vote["contest_entry_id"] == entry["contest_entry_id"])  # noqa: B023
             for vote_idx, vote in enumerate(entry["votes"]):
-                vote_scores = where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"])
+                vote_scores = where(scores, lambda score: score["contest_judge_vote_id"] == vote["id"])  # noqa: B023
                 for score_idx, score in enumerate(vote_scores):
                     vote_scores[score_idx]["contest_scoring_category_name"] = category_by_id[score["contest_scoring_category_id"]]["name"]
                 entry["votes"][vote_idx]["scores"] = vote_scores
                 entry["votes"][vote_idx]["score_sum"] = sum(score["value"] for score in vote_scores)
-                entry["votes"][vote_idx]["username"] = first(judges, lambda judge: judge["id"] == entry["votes"][vote_idx]["user_id"])["username"]
+                entry["votes"][vote_idx]["username"] = first(judges, lambda judge: judge["id"] == entry["votes"][vote_idx]["user_id"])["username"]  # noqa: B023
 
             entry["total_score"] = sum([vote["score_sum"] for vote in entry["votes"]])
             entry["average_score"] = entry["total_score"] / len(judges)
@@ -169,7 +169,7 @@ def main(*args):
                 entry[f"standardised_score ({judge["username"]})"] = (raw_score - judge["average"]) / judge["standard_deviation"]
 
                 try:
-                    comment = first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["comment"]
+                    comment = first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["comment"]  # noqa: B023
                 except IndexError:
                     comment = ""
 
@@ -177,7 +177,7 @@ def main(*args):
 
                 for category in judging_categories:
                     try:
-                        score = first(first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["scores"], lambda score: score["contest_scoring_category_name"] == category["name"])["value"]
+                        score = first(first(entry["votes"], lambda vote: vote["user_id"] == judge["id"])["scores"], lambda score: score["contest_scoring_category_name"] == category["name"])["value"]  # noqa: B023
                     except IndexError:
                         print(f"{judge["username"]} didn't set {category["name"]} score on {entry["masked_name"]}", file=sys.stderr)
                         score = None
